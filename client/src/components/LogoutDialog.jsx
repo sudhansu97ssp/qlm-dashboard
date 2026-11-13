@@ -73,7 +73,7 @@ export default function LogoutDialog({ open, onClose, onConfirm, currentUser }) 
             Active Account
           </Typography>
           <Typography variant="body2" sx={{ fontWeight: 700, color: '#0f172a', fontSize: '0.825rem' }}>
-            {email}
+            Admin
           </Typography>
         </Box>
       </DialogContent>

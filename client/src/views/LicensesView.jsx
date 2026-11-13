@@ -333,21 +333,29 @@ export default function LicensesView({
                       {/* Customer */}
                       <TableCell>
                         <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>
-                          {lic.CompanyName}
+                          {lic.ContactName || lic.CustomerName || lic.CompanyName}
                         </Typography>
-                        <Typography variant="caption" sx={{ color: '#64748b' }}>
-                          {lic.CustomerEmail || lic.Country}
+                        {lic.CompanyName && (lic.ContactName || lic.CustomerName) && lic.CompanyName !== (lic.ContactName || lic.CustomerName) && (
+                          <Typography variant="caption" sx={{ color: '#475569', display: 'block', fontWeight: 500 }}>
+                            {lic.CompanyName}
+                          </Typography>
+                        )}
+                        <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>
+                          {lic.CustomerEmail || lic.Email}
+                          {lic.Location && lic.Location !== 'Global' ? ` • ${lic.Location}` : (lic.Country && lic.Country !== 'Global' ? ` • ${lic.Country}` : '')}
                         </Typography>
                       </TableCell>
 
                       {/* Product */}
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>
+                        <Typography variant="body2" sx={{ fontSize: '0.85rem', fontWeight: 600, color: '#0f172a' }}>
                           {lic.ProductName}
                         </Typography>
-                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                          {lic.Edition || 'Standard'}
-                        </Typography>
+                        {lic.ProductCode && lic.ProductCode !== '1' && (
+                          <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>
+                            {lic.ProductCode.startsWith('v') ? lic.ProductCode : `v${lic.ProductCode}`}
+                          </Typography>
+                        )}
                       </TableCell>
 
                       {/* License Model */}

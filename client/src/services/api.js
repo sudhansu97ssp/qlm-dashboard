@@ -64,7 +64,7 @@ export const verifyToken = async () => {
 export const logout = async () => {
   try {
     await api.post('/auth/logout');
-  } catch (_) {}
+  } catch (_) { }
   localStorage.removeItem('qlm_auth_token');
   localStorage.removeItem('qlm_auth_user');
   window.dispatchEvent(new CustomEvent('qlm-unauthorized', {
@@ -121,8 +121,13 @@ export const fetchLicenseById = async (id) => {
 };
 
 export const fetchProducts = async () => {
-  const res = await api.get(`/licenses/products?_t=${Date.now()}`);
+  const res = await api.get(`/products?_t=${Date.now()}`);
   return res.data.data;
+};
+
+export const createProduct = async (productData) => {
+  const res = await api.post('/products', productData);
+  return res.data;
 };
 
 export const createLicense = async (licenseData) => {

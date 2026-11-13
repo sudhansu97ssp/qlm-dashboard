@@ -7,6 +7,7 @@ import { authenticateToken } from './middleware/auth.js';
 import customersRouter from './routes/customers.js';
 import licensesRouter from './routes/licenses.js';
 import analyticsRouter from './routes/analytics.js';
+import productsRouter from './routes/products.js';
 
 const app = express();
 
@@ -53,6 +54,7 @@ apiRouter.use('/auth', authRouter);
 apiRouter.use('/analytics', authenticateToken, analyticsRouter);
 apiRouter.use('/customers', authenticateToken, customersRouter);
 apiRouter.use('/licenses', authenticateToken, licensesRouter);
+apiRouter.use('/products', authenticateToken, productsRouter);
 
 // Mount on both /api and root / so any Vercel rewrite or direct hit resolves correctly
 app.use('/api', apiRouter);

@@ -210,7 +210,7 @@ export default function LicenseModal({ open, onClose, customers = [], products =
                 >
                   {products.map((p) => (
                     <MenuItem key={p.ProductID} value={p.ProductID}>
-                      {p.ProductName} ({p.Edition})
+                      {p.ProductName}
                     </MenuItem>
                   ))}
                 </TextField>

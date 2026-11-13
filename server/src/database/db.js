@@ -1,5 +1,18 @@
-import sql from 'mssql';
+let sql = null;
+async function getSql() {
+  if (!sql) {
+    try {
+      const mod = await import('mssql');
+      sql = mod.default || mod;
+    } catch (err) {
+      console.warn('[EC2 DB Driver Load Warning]:', err.message);
+      return null;
+    }
+  }
+  return sql;
+}
 import { config } from '../config/env.js';
+import { v4 as uuidv4 } from 'uuid';
 import {
   initialCustomers,
   initialLicenses,
@@ -66,12 +79,20 @@ export async function initDatabase(customConfig = null) {
     return { connected: false, message: lastConnectionError, mode: 'Simulation' };
   }
 
+  const sqlClient = await getSql();
+  if (!sqlClient) {
+    isConnectedToEc2 = false;
+    lastConnectionError = 'MS SQL driver not available in this runtime. Operating in Simulation Mode.';
+    console.warn(`[EC2 DB] ${lastConnectionError}`);
+    return { connected: false, message: lastConnectionError, mode: 'Simulation' };
+  }
+
   try {
     if (pool && !global._mssqlPool) {
-      try { await pool.close(); } catch (_) {}
+      try { await pool.close(); } catch (_) { }
     }
     console.log(`[EC2 DB] Connecting to MS SQL Server at ${dbConfig.server}:${dbConfig.port}, Database: ${dbConfig.database}...`);
-    pool = await sql.connect({
+    pool = await sqlClient.connect({
       server: dbConfig.server,
       port: dbConfig.port || 1433,
       user: dbConfig.user,
@@ -80,8 +101,8 @@ export async function initDatabase(customConfig = null) {
       options: {
         encrypt: dbConfig.options?.encrypt ?? false,
         trustServerCertificate: dbConfig.options?.trustServerCertificate ?? true,
-        connectTimeout: 8000,
-        requestTimeout: 20000
+        connectTimeout: dbConfig.options?.connectTimeout || 15000,
+        requestTimeout: dbConfig.options?.requestTimeout || 45000
       },
       pool: {
         min: process.env.VERCEL ? 0 : 2,                  // 0 on serverless to prevent idle socket leaks, 2 for persistent local dev
@@ -95,8 +116,8 @@ export async function initDatabase(customConfig = null) {
     global._mssqlPool = pool;
 
     // Detect if this is Soraco QLM's native schema (with LicenseKeys table)
-    const checkRes = await pool.request().query("SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'LicenseKeys'");
-    isNativeQlmDb = checkRes.recordset[0].cnt > 0;
+    const checkRes = await pool.request().query("SELECT OBJECT_ID('LicenseKeys', 'U') as tblId");
+    isNativeQlmDb = Boolean(checkRes.recordset[0]?.tblId);
     global._isNativeQlmDb = isNativeQlmDb;
 
     console.log(`[EC2 DB] Successfully connected to MS SQL Database on EC2 instance! Native QLM Schema: ${isNativeQlmDb}`);
@@ -135,54 +156,180 @@ export function getDbStatus() {
 // Database Query Operations (Live SQL with native QLM mapping)
 // -------------------------------------------------------------
 
+/**
+ * Derives professional company and contact names when user data in QLM is blank/generic
+ */
+export function deriveCustomerNames(company, fullName, email) {
+  const comp = (company || '').trim();
+  const name = (fullName || '').trim();
+  const mail = (email || '').trim();
+
+  const isGeneric = (val) => !val || ['n/a', 'none', 'independent', 'independent customer', 'unknown'].includes(val.toLowerCase());
+
+  let derivedContact = name;
+  let derivedCompany = comp;
+
+  // 1. Resolve Contact Name if missing or generic
+  if (isGeneric(derivedContact)) {
+    if (mail && mail.includes('@')) {
+      const userPart = mail.split('@')[0];
+      const parts = userPart.split(/[._-]+/).filter(Boolean);
+      if (parts.length > 0) {
+        derivedContact = parts
+          .map(p => p.replace(/[0-9]+/g, ''))
+          .filter(Boolean)
+          .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+          .join(' ');
+      }
+      if (!derivedContact) {
+        derivedContact = userPart;
+      }
+    } else {
+      derivedContact = 'Valued Customer';
+    }
+  }
+
+  // 2. Resolve Company Name if missing or generic
+  if (isGeneric(derivedCompany)) {
+    // If corporate domain exists, derive clean company name
+    if (mail && mail.includes('@')) {
+      const domain = mail.split('@')[1]?.toLowerCase() || '';
+      const publicProviders = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com', 'proton.me', 'protonmail.com', 'live.com', 'msn.com'];
+      if (domain && !publicProviders.includes(domain)) {
+        const domainBase = domain.split('.')[0] || '';
+        if (domainBase.toLowerCase() === 'ncircletech') {
+          derivedCompany = 'nCircle Tech';
+        } else if (domainBase) {
+          derivedCompany = domainBase.charAt(0).toUpperCase() + domainBase.slice(1);
+        }
+      }
+    }
+
+    // If still missing or personal email (e.g. Gmail), use contact name as Company
+    if (isGeneric(derivedCompany)) {
+      derivedCompany = derivedContact || 'Individual Account';
+    }
+  }
+
+  return {
+    companyName: derivedCompany,
+    contactName: derivedContact
+  };
+}
+
 export async function fetchCustomers({ search = '', country = '', tier = '', status = '' }) {
   await ensureDbConnected();
   if (isConnectedToEc2 && pool) {
     try {
       if (isNativeQlmDb) {
-        // Live Soraco QLM Database Customers Query
-        const request = pool.request();
-        let query = `
-          SELECT 
-            c.ID as CustomerID,
-            ISNULL(NULLIF(c.Company, ''), ISNULL(NULLIF(c.FullName, ''), 'Independent Customer')) as CompanyName,
-            ISNULL(NULLIF(c.FullName, ''), 'N/A') as ContactName,
-            c.Email,
-            c.Phone,
-            ISNULL(NULLIF(c.Country, ''), 'Global') as Country,
-            c.City,
-            CASE 
-              WHEN COUNT(l.ID) >= 5 THEN 'Strategic'
-              WHEN COUNT(l.ID) >= 2 THEN 'Enterprise'
-              ELSE 'Standard'
-            END as CustomerTier,
-            'Active' as Status,
-            c.CreationDate as CreatedAt,
-            COUNT(l.ID) as TotalLicenses,
-            SUM(CASE WHEN l.Disabled = 0 AND (l.SubscriptionExpiryDate IS NULL OR l.SubscriptionExpiryDate > GETUTCDATE()) THEN 1 ELSE 0 END) as ActiveLicenses
-          FROM Customers c
-          LEFT JOIN LicenseKeys l ON c.ID = l.UserID
-          WHERE (c.FullName IS NOT NULL AND c.FullName != '') 
-             OR (c.Company IS NOT NULL AND c.Company != '') 
-             OR (c.Email IS NOT NULL AND c.Email != 'None')
-        `;
+        // Live Soraco QLM Database Customers Query with fast parallel count lookup
+        const [custRes, licCountRes] = await Promise.all([
+          pool.request().query(`
+            SELECT 
+              c.ID as CustomerID,
+              c.Company,
+              c.FullName,
+              c.Email,
+              c.Phone,
+              c.Mobile,
+              ISNULL(NULLIF(c.Country, ''), 'Global') as Country,
+              c.City,
+              'Active' as Status,
+              c.CreationDate as CreatedAt
+            FROM Customers c WITH (NOLOCK)
+            ORDER BY c.ID DESC
+          `),
+          pool.request().query(`
+            SELECT 
+              UserID,
+              COUNT(ID) as TotalLicenses,
+              SUM(CASE WHEN Disabled = 0 AND (SubscriptionExpiryDate IS NULL OR SubscriptionExpiryDate > GETUTCDATE()) THEN 1 ELSE 0 END) as ActiveLicenses,
+              SUM(CASE WHEN LicenseModel = 2 THEN 1 ELSE 0 END) as TrialLicenses,
+              SUM(CASE WHEN LicenseModel = 3 THEN 1 ELSE 0 END) as SubscriptionLicenses,
+              SUM(CASE WHEN LicenseModel = 1 THEN 1 ELSE 0 END) as PermanentLicenses
+            FROM LicenseKeys WITH (NOLOCK)
+            WHERE UserID IS NOT NULL
+            GROUP BY UserID
+          `)
+        ]);
+
+        const licMap = new Map();
+        licCountRes.recordset.forEach(r => {
+          licMap.set(r.UserID, {
+            total: r.TotalLicenses || 0,
+            active: r.ActiveLicenses || 0,
+            trial: r.TrialLicenses || 0,
+            subscription: r.SubscriptionLicenses || 0,
+            permanent: r.PermanentLicenses || 0
+          });
+        });
+
+        let list = custRes.recordset.map(c => {
+          const lData = licMap.get(c.CustomerID) || { total: 0, active: 0, trial: 0, subscription: 0, permanent: 0 };
+          const tierVal = lData.total >= 5 ? 'Strategic' : (lData.total >= 2 ? 'Enterprise' : 'Standard');
+          const resolved = deriveCustomerNames(c.Company, c.FullName, c.Email);
+
+          let modelLabel = 'Standard';
+          if (lData.trial > 0 && lData.subscription > 0) {
+            modelLabel = 'Trial & Subscription';
+          } else if (lData.trial > 0) {
+            modelLabel = 'Trial';
+          } else if (lData.subscription > 0) {
+            modelLabel = 'Subscription';
+          } else if (lData.permanent > 0) {
+            modelLabel = 'Permanent';
+          } else if (lData.total === 0) {
+            modelLabel = 'None';
+          }
+
+          const rawPhone = (c.Phone || '').trim();
+          const rawMobile = (c.Mobile || '').trim();
+          const phoneDisplay = rawPhone || rawMobile || '—';
+          const locationDisplay = c.City && c.Country ? `${c.City}, ${c.Country}` : (c.City || c.Country || 'Global');
+
+          return {
+            CustomerID: c.CustomerID,
+            CustomerName: resolved.contactName,
+            ContactName: resolved.contactName,
+            Company: resolved.companyName,
+            CompanyName: resolved.companyName,
+            Email: c.Email || '—',
+            Phone: phoneDisplay,
+            PhoneNumber: phoneDisplay,
+            Location: locationDisplay,
+            Country: c.Country || 'Global',
+            City: c.City || '',
+            LicenseModel: modelLabel,
+            Status: c.Status,
+            CreatedAt: c.CreatedAt,
+            CustomerTier: tierVal,
+            TotalLicenses: lData.total,
+            ActiveLicenses: lData.active
+          };
+        });
 
         if (search) {
-          request.input('search', sql.NVarChar, `%${search}%`);
-          query += ` AND (c.Company LIKE @search OR c.FullName LIKE @search OR c.Email LIKE @search)`;
+          const s = search.toLowerCase();
+          list = list.filter(c =>
+            (c.CustomerName && c.CustomerName.toLowerCase().includes(s)) ||
+            (c.Company && c.Company.toLowerCase().includes(s)) ||
+            (c.Email && c.Email.toLowerCase().includes(s)) ||
+            (c.Phone && c.Phone.toLowerCase().includes(s)) ||
+            (c.Location && c.Location.toLowerCase().includes(s)) ||
+            (c.LicenseModel && c.LicenseModel.toLowerCase().includes(s))
+          );
         }
         if (country) {
-          request.input('country', sql.NVarChar, country);
-          query += ` AND c.Country = @country`;
+          list = list.filter(c => c.Country === country);
+        }
+        if (tier) {
+          list = list.filter(c => c.CustomerTier === tier);
+        }
+        if (status) {
+          list = list.filter(c => c.Status === status);
         }
 
-        query += `
-          GROUP BY c.ID, c.Company, c.FullName, c.Email, c.Phone, c.Country, c.City, c.CreationDate
-          ORDER BY c.ID DESC
-        `;
-
-        const res = await request.query(query);
-        return res.recordset;
+        return list;
       } else {
         // Custom schema Customers Query
         const request = pool.request();
@@ -282,7 +429,7 @@ export async function fetchCustomerById(customerId) {
                 p.ProductName,
                 CASE l.LicenseModel WHEN 1 THEN 'Permanent' WHEN 2 THEN 'Trial' WHEN 3 THEN 'Subscription' WHEN 4 THEN 'Floating' ELSE 'Subscription' END as LicenseModel,
                 CASE l.LicenseModel WHEN 1 THEN 'Permanent' WHEN 2 THEN 'Trial' WHEN 3 THEN 'Subscription' WHEN 4 THEN 'Floating' ELSE 'Subscription' END as LicenseType,
-                CASE WHEN l.Disabled = 1 THEN 'Revoked' WHEN l.SubscriptionExpiryDate < GETUTCDATE() THEN 'Expired' ELSE 'Active' END as Status,
+                CASE WHEN (l.Disabled = 1 OR l.Comment LIKE '%Revoked:%') THEN 'Revoked' WHEN l.SubscriptionExpiryDate < GETUTCDATE() THEN 'Expired' ELSE 'Active' END as Status,
                 ISNULL(l.NumLicenses, 1) as NumLicenses,
                 ISNULL(l.AvailableLicenses, 0) as AvailableLicenses,
                 CASE WHEN ISNULL(l.NumLicenses, 1) > ISNULL(l.AvailableLicenses, 0) THEN ISNULL(l.NumLicenses, 1) - ISNULL(l.AvailableLicenses, 0) ELSE 0 END as ActivatedCount,
@@ -318,8 +465,8 @@ export async function fetchCustomerById(customerId) {
     .filter(l => l.CustomerID === customerId)
     .map(l => {
       const prod = memoryStore.products.find(p => p.ProductID === l.ProductID);
-      return { 
-        ...l, 
+      return {
+        ...l,
         ProductName: prod ? prod.ProductName : 'Unknown Product',
         LicenseModel: l.LicenseModel || l.LicenseType || 'Subscription',
         NumLicenses: l.NumLicenses || l.SeatsTotal || 1,
@@ -336,98 +483,143 @@ export async function fetchLicenses({ search = '', status = '', productId = '', 
   if (isConnectedToEc2 && pool) {
     try {
       if (isNativeQlmDb) {
-        // Live Soraco QLM Database LicenseKeys Query
-        const request = pool.request();
-        let query = `
-          SELECT 
-            l.ID as LicenseID,
-            l.ActivationKey,
-            l.ComputerKey,
-            l.UserID as CustomerID,
-            l.ProductID,
-            ISNULL(p.ProductName, 'QLM Software') as ProductName,
-            ISNULL(p.LatestVersion, 'v1.0') as ProductCode,
-            ISNULL(p.Major, 'Standard') as Edition,
-            ISNULL(NULLIF(c.Company, ''), ISNULL(NULLIF(c.FullName, ''), 'Independent')) as CompanyName,
-            ISNULL(NULLIF(c.FullName, ''), 'N/A') as ContactName,
-            c.Email as CustomerEmail,
-            ISNULL(NULLIF(c.Country, ''), 'Global') as Country,
-            CASE l.LicenseModel 
-              WHEN 1 THEN 'Permanent' 
-              WHEN 2 THEN 'Trial' 
-              WHEN 3 THEN 'Subscription' 
-              WHEN 4 THEN 'Floating' 
-              ELSE 'Subscription' 
-            END as LicenseModel,
-            CASE l.LicenseModel 
-              WHEN 1 THEN 'Permanent' 
-              WHEN 2 THEN 'Trial' 
-              WHEN 3 THEN 'Subscription' 
-              WHEN 4 THEN 'Floating' 
-              ELSE 'Subscription' 
-            END as LicenseType,
-            CASE 
-              WHEN l.Disabled = 1 THEN 'Revoked'
-              WHEN l.SubscriptionExpiryDate IS NOT NULL AND l.SubscriptionExpiryDate < GETUTCDATE() THEN 'Expired'
-              ELSE 'Active'
-            END as Status,
-            ISNULL(l.NumLicenses, 1) as NumLicenses,
-            ISNULL(l.AvailableLicenses, 0) as AvailableLicenses,
-            CASE 
-              WHEN ISNULL(l.NumLicenses, 1) > ISNULL(l.AvailableLicenses, 0) 
-              THEN ISNULL(l.NumLicenses, 1) - ISNULL(l.AvailableLicenses, 0)
-              ELSE 0 
-            END as ActivatedCount,
-            ISNULL(l.AvailableLicenses, 0) as NotActivatedCount,
-            ISNULL(l.NumLicenses, 1) as SeatsTotal,
-            CASE 
-              WHEN ISNULL(l.NumLicenses, 1) > ISNULL(l.AvailableLicenses, 0) 
-              THEN ISNULL(l.NumLicenses, 1) - ISNULL(l.AvailableLicenses, 0)
-              ELSE 0 
-            END as SeatsUsed,
-            ISNULL(l.OrderDate, l.CreationDate) as IssuedDate,
-            l.SubscriptionExpiryDate as ExpiryDate,
-            l.MaintenanceRenewalDate as MaintenanceExpiryDate,
-            l.LastAccessedDate as LastCheckIn,
-            l.Comment as Notes
-          FROM LicenseKeys l
-          LEFT JOIN Customers c ON l.UserID = c.ID
-          LEFT JOIN Products p ON l.ProductID = p.ID
-          WHERE 1=1
-        `;
+        // Fast parallel fetch with NOLOCK to prevent EC2 lock contention and timeouts
+        const [licRes, custRes, prodRes] = await Promise.all([
+          pool.request().query(`
+            SELECT 
+              l.ID as LicenseID,
+              l.ActivationKey,
+              l.ComputerKey,
+              l.UserID as CustomerID,
+              l.ProductID,
+              l.LicenseModel,
+              l.Disabled,
+              l.NumLicenses,
+              l.AvailableLicenses,
+              l.OrderDate,
+              l.CreationDate,
+              l.SubscriptionExpiryDate,
+              l.MaintenanceRenewalDate,
+              l.LastAccessedDate,
+              l.Comment as Notes
+            FROM LicenseKeys l WITH (NOLOCK)
+            ORDER BY l.ID DESC
+          `),
+          pool.request().query(`
+            SELECT ID, Company, FullName, Email, Country, City, Phone, Mobile FROM Customers WITH (NOLOCK)
+          `),
+          pool.request().query(`
+            SELECT ID, ProductName, LatestVersion, Major FROM Products WITH (NOLOCK)
+          `)
+        ]);
+
+        const custMap = new Map();
+        custRes.recordset.forEach(c => custMap.set(c.ID, c));
+
+        const prodMap = new Map();
+        prodRes.recordset.forEach(p => prodMap.set(p.ID, p));
+
+        const now = new Date();
+
+        let list = licRes.recordset.map(l => {
+          const c = custMap.get(l.CustomerID) || {};
+          const p = prodMap.get(l.ProductID) || {};
+
+          const m = Number(l.LicenseModel);
+          let modelName = 'Subscription';
+          if (m === 1) modelName = 'Permanent';
+          else if (m === 2) modelName = 'Trial';
+          else if (m === 3) modelName = 'Subscription';
+          else if (m === 4) modelName = 'Floating';
+
+          const numLics = l.NumLicenses != null ? l.NumLicenses : 1;
+          const availLics = l.AvailableLicenses != null ? l.AvailableLicenses : 0;
+          const activatedCount = numLics > availLics ? (numLics - availLics) : 0;
+
+          const isRevoked = Boolean(
+            l.Disabled === 1 ||
+            l.Disabled === true ||
+            String(l.Disabled) === '1' ||
+            String(l.Disabled) === 'true' ||
+            (l.Notes && String(l.Notes).toLowerCase().includes('revoked:'))
+          );
+
+          let licStatus = 'Active';
+          if (isRevoked) {
+            licStatus = 'Revoked';
+          } else if (l.SubscriptionExpiryDate && new Date(l.SubscriptionExpiryDate) < now) {
+            licStatus = 'Expired';
+          } else if (l.Notes && String(l.Notes).toLowerCase().includes('deactivated:')) {
+            licStatus = 'Deactivated';
+          }
+
+          const resolvedNames = deriveCustomerNames(c.Company, c.FullName, c.Email);
+          const rawPhone = (c.Phone || '').trim() || (c.Mobile || '').trim() || '—';
+          const locationDisplay = c.City && c.Country ? `${c.City}, ${c.Country}` : (c.City || c.Country || 'Global');
+
+          return {
+            LicenseID: l.LicenseID,
+            ActivationKey: l.ActivationKey,
+            ComputerKey: l.ComputerKey,
+            CustomerID: l.CustomerID,
+            ProductID: l.ProductID,
+            ProductName: p.ProductName || 'QLM Software',
+            ProductCode: (p.LatestVersion || 'v1.0').trim(),
+            Edition: (p.Major && p.Major.trim() !== '1') ? p.Major.trim() : 'Standard',
+            CompanyName: resolvedNames.companyName,
+            Company: resolvedNames.companyName,
+            ContactName: resolvedNames.contactName,
+            CustomerName: resolvedNames.contactName,
+            CustomerEmail: c.Email || '',
+            Email: c.Email || '',
+            Phone: rawPhone,
+            PhoneNumber: rawPhone,
+            Location: locationDisplay,
+            Country: c.Country || 'Global',
+            City: c.City || '',
+            LicenseModel: modelName,
+            LicenseType: modelName,
+            Status: licStatus,
+            NumLicenses: numLics,
+            AvailableLicenses: availLics,
+            ActivatedCount: activatedCount,
+            NotActivatedCount: availLics,
+            SeatsTotal: numLics,
+            SeatsUsed: activatedCount,
+            IssuedDate: l.OrderDate || l.CreationDate,
+            ExpiryDate: l.SubscriptionExpiryDate,
+            MaintenanceExpiryDate: l.MaintenanceRenewalDate,
+            LastCheckIn: l.LastAccessedDate,
+            Notes: l.Notes
+          };
+        });
 
         if (search) {
-          request.input('search', sql.NVarChar, `%${search}%`);
-          query += ` AND (l.ActivationKey LIKE @search OR c.Company LIKE @search OR c.Email LIKE @search OR CAST(l.ID AS NVARCHAR) LIKE @search)`;
+          const s = search.toLowerCase();
+          list = list.filter(l =>
+            (l.ActivationKey && l.ActivationKey.toLowerCase().includes(s)) ||
+            (l.CompanyName && l.CompanyName.toLowerCase().includes(s)) ||
+            (l.ContactName && l.ContactName.toLowerCase().includes(s)) ||
+            (l.CustomerEmail && l.CustomerEmail.toLowerCase().includes(s)) ||
+            (l.Phone && l.Phone.toLowerCase().includes(s)) ||
+            (l.Location && l.Location.toLowerCase().includes(s)) ||
+            (String(l.LicenseID).includes(s))
+          );
         }
         if (status) {
-          if (status === 'Revoked') {
-            query += ` AND l.Disabled = 1`;
-          } else if (status === 'Expired') {
-            query += ` AND l.Disabled = 0 AND l.SubscriptionExpiryDate < GETUTCDATE()`;
-          } else if (status === 'Active') {
-            query += ` AND l.Disabled = 0 AND (l.SubscriptionExpiryDate IS NULL OR l.SubscriptionExpiryDate >= GETUTCDATE())`;
-          }
+          list = list.filter(l => l.Status === status);
         }
         if (productId) {
-          request.input('productId', sql.Int, parseInt(productId, 10));
-          query += ` AND l.ProductID = @productId`;
+          list = list.filter(l => String(l.ProductID) === String(productId));
         }
         if (type) {
-          const typeMap = { 'Permanent': 1, 'Trial': 2, 'Subscription': 3, 'Floating': 4 };
-          if (typeMap[type]) {
-            request.input('typeModel', sql.BigInt, typeMap[type]);
-            query += ` AND l.LicenseModel = @typeModel`;
-          }
+          list = list.filter(l => l.LicenseType === type || l.LicenseModel === type);
         }
         if (customerId) {
-          request.input('userId', sql.Int, parseInt(customerId, 10));
-          query += ` AND l.UserID = @userId`;
+          list = list.filter(l => String(l.CustomerID) === String(customerId));
         }
 
-        query += ` ORDER BY l.ID DESC`;
-        const res = await request.query(query);
-        return res.recordset;
+        return list;
       } else {
         // Custom schema Licenses Query
         const request = pool.request();
@@ -533,15 +725,15 @@ export async function fetchLicenseById(licenseId) {
             l.UserID as CustomerID,
             l.ProductID,
             ISNULL(p.ProductName, 'QLM Software') as ProductName,
-            ISNULL(p.LatestVersion, 'v1.0') as ProductCode,
-            ISNULL(p.Major, 'Standard') as Edition,
+            ISNULL(NULLIF(p.LatestVersion, ''), '1.0') as ProductCode,
+            'Standard' as Edition,
             ISNULL(NULLIF(c.Company, ''), ISNULL(NULLIF(c.FullName, ''), 'Independent')) as CompanyName,
             ISNULL(NULLIF(c.FullName, ''), 'N/A') as ContactName,
             c.Email as CustomerEmail,
             ISNULL(NULLIF(c.Country, ''), 'Global') as Country,
             CASE l.LicenseModel WHEN 1 THEN 'Permanent' WHEN 2 THEN 'Trial' WHEN 3 THEN 'Subscription' WHEN 4 THEN 'Floating' ELSE 'Subscription' END as LicenseModel,
             CASE l.LicenseModel WHEN 1 THEN 'Permanent' WHEN 2 THEN 'Trial' WHEN 3 THEN 'Subscription' WHEN 4 THEN 'Floating' ELSE 'Subscription' END as LicenseType,
-            CASE WHEN l.Disabled = 1 THEN 'Revoked' WHEN l.SubscriptionExpiryDate < GETUTCDATE() THEN 'Expired' ELSE 'Active' END as Status,
+            CASE WHEN (l.Disabled = 1 OR l.Comment LIKE '%Revoked:%') THEN 'Revoked' WHEN l.SubscriptionExpiryDate < GETUTCDATE() THEN 'Expired' ELSE 'Active' END as Status,
             ISNULL(l.NumLicenses, 1) as NumLicenses,
             ISNULL(l.AvailableLicenses, 0) as AvailableLicenses,
             CASE WHEN ISNULL(l.NumLicenses, 1) > ISNULL(l.AvailableLicenses, 0) THEN ISNULL(l.NumLicenses, 1) - ISNULL(l.AvailableLicenses, 0) ELSE 0 END as ActivatedCount,
@@ -553,15 +745,17 @@ export async function fetchLicenseById(licenseId) {
             l.MaintenanceRenewalDate as MaintenanceExpiryDate,
             l.LastAccessedDate as LastCheckIn,
             l.Comment as Notes
-          FROM LicenseKeys l
-          LEFT JOIN Customers c ON l.UserID = c.ID
-          LEFT JOIN Products p ON l.ProductID = p.ID
+          FROM LicenseKeys l WITH (NOLOCK)
+          LEFT JOIN Customers c WITH (NOLOCK) ON l.UserID = c.ID
+          LEFT JOIN Products p WITH (NOLOCK) ON l.ProductID = p.ID
           WHERE l.ActivationKey = @idOrKey OR CAST(l.ID AS NVARCHAR) = @idOrKey
         `);
 
         if (res.recordset.length > 0) {
+          const row = res.recordset[0];
+          const resolvedNames = deriveCustomerNames(row.CompanyName, row.ContactName, row.CustomerEmail);
           const actRes = await pool.request()
-            .input('actKey', sql.NVarChar, res.recordset[0].ActivationKey)
+            .input('actKey', sql.NVarChar, row.ActivationKey)
             .query(`
               SELECT 
                 ID as ActivationID,
@@ -572,11 +766,16 @@ export async function fetchLicenseById(licenseId) {
                 IP_Address as IPAddress,
                 ActivationDate as ActivatedAt,
                 1 as IsActive
-              FROM ActivationLog
+              FROM ActivationLog WITH (NOLOCK)
               WHERE ActivationKey = @actKey
               ORDER BY ActivationDate DESC
             `);
-          return { ...res.recordset[0], activations: actRes.recordset };
+          return {
+            ...row,
+            CompanyName: resolvedNames.companyName,
+            ContactName: resolvedNames.contactName,
+            activations: actRes.recordset
+          };
         }
       } else {
         const request = pool.request();
@@ -756,10 +955,10 @@ export async function updateLicenseStatus(licenseIdOrKey, newStatus, reason = ''
 
 let cachedProducts = null;
 let lastProductsFetchTime = 0;
-const PRODUCTS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const PRODUCTS_CACHE_TTL = 30 * 1000; // 30 seconds cache for products
 
-export async function fetchProducts() {
-  if (cachedProducts && (Date.now() - lastProductsFetchTime < PRODUCTS_CACHE_TTL)) {
+export async function fetchProducts(forceRefresh = false) {
+  if (!forceRefresh && cachedProducts && (Date.now() - lastProductsFetchTime < PRODUCTS_CACHE_TTL)) {
     return cachedProducts;
   }
 
@@ -767,24 +966,65 @@ export async function fetchProducts() {
   if (isConnectedToEc2 && pool) {
     try {
       if (isNativeQlmDb) {
-        const res = await pool.request().query(`
-          SELECT 
-            ID as ProductID,
-            ProductName,
-            ISNULL(LatestVersion, 'v1.0') as ProductCode,
-            1 as MajorVersion,
-            0 as MinorVersion,
-            'Standard' as Edition,
-            ISNULL(Features, '') as Description,
-            1 as IsActive
-          FROM Products
-          ORDER BY ID ASC
-        `);
-        cachedProducts = res.recordset;
+        const [prodRes, licRes] = await Promise.all([
+          pool.request().query(`
+            SELECT 
+              ID as ProductID,
+              ProductName,
+              ISNULL(NULLIF(LTRIM(RTRIM(LatestVersion)), ''), 
+                CONCAT(ISNULL(NULLIF(LTRIM(RTRIM(Major)), ''), '1'), '.', ISNULL(NULLIF(LTRIM(RTRIM(Minor)), ''), '0'), '.0')
+              ) as CurrentVersion,
+              ISNULL(NULLIF(LTRIM(RTRIM(LatestVersion)), ''), 
+                CONCAT(ISNULL(NULLIF(LTRIM(RTRIM(Major)), ''), '1'), '.', ISNULL(NULLIF(LTRIM(RTRIM(Minor)), ''), '0'), '.0')
+              ) as ProductCode,
+              ISNULL(NULLIF(LTRIM(RTRIM(Major)), ''), '1') as MajorVersion,
+              ISNULL(NULLIF(LTRIM(RTRIM(Minor)), ''), '0') as MinorVersion,
+              'Standard' as Edition,
+              ISNULL(Features, '') as Description,
+              ReleaseDate,
+              1 as IsActive
+            FROM Products WITH (NOLOCK)
+            ORDER BY ID DESC
+          `),
+          pool.request().query(`
+            SELECT 
+              ProductID,
+              COUNT(ID) as TotalLicenses,
+              SUM(CASE WHEN Disabled = 0 AND (SubscriptionExpiryDate IS NULL OR SubscriptionExpiryDate > GETUTCDATE()) THEN 1 ELSE 0 END) as ActiveLicenses,
+              SUM(CASE WHEN LicenseModel = 2 THEN 1 ELSE 0 END) as TrialLicenses,
+              SUM(CASE WHEN LicenseModel = 3 THEN 1 ELSE 0 END) as SubscriptionLicenses
+            FROM LicenseKeys WITH (NOLOCK)
+            WHERE ProductID IS NOT NULL
+            GROUP BY ProductID
+          `)
+        ]);
+
+        const licMap = new Map();
+        licRes.recordset.forEach(r => {
+          licMap.set(r.ProductID, {
+            total: r.TotalLicenses || 0,
+            active: r.ActiveLicenses || 0,
+            trial: r.TrialLicenses || 0,
+            subscription: r.SubscriptionLicenses || 0
+          });
+        });
+
+        const list = prodRes.recordset.map(p => {
+          const lData = licMap.get(p.ProductID) || { total: 0, active: 0, trial: 0, subscription: 0 };
+          return {
+            ...p,
+            TotalLicenses: lData.total,
+            ActiveLicenses: lData.active,
+            TrialLicenses: lData.trial,
+            SubscriptionLicenses: lData.subscription
+          };
+        });
+
+        cachedProducts = list;
         lastProductsFetchTime = Date.now();
-        return res.recordset;
+        return list;
       } else {
-        const res = await pool.request().query('SELECT * FROM Products ORDER BY ProductID ASC');
+        const res = await pool.request().query('SELECT * FROM Products WITH (NOLOCK) ORDER BY ProductID ASC');
         cachedProducts = res.recordset;
         lastProductsFetchTime = Date.now();
         return res.recordset;
@@ -794,6 +1034,101 @@ export async function fetchProducts() {
     }
   }
   return memoryStore.products;
+}
+
+export async function insertProduct({ productName, version = '1.0.0', major = '1', minor = '0', description = '', features = '' }) {
+  await ensureDbConnected();
+
+  const cleanName = (productName || '').trim();
+  if (!cleanName) {
+    throw new Error('Product name is required');
+  }
+
+  const cleanVersion = (version || '1.0.0').trim();
+  const cleanMajor = (major || '1').trim();
+  const cleanMinor = (minor || '0').trim();
+
+  if (isConnectedToEc2 && pool) {
+    try {
+      if (isNativeQlmDb) {
+        // Query current maximum ID
+        const maxRes = await pool.request().query('SELECT MAX(ID) as maxId FROM Products WITH (NOLOCK)');
+        const nextId = (maxRes.recordset[0]?.maxId || 0) + 1;
+
+        const guid = `{${uuidv4()}}`;
+        const uniqueId = uuidv4();
+
+        const req = pool.request();
+        req.input('id', sql.Int, nextId);
+        req.input('name', sql.NVarChar, cleanName);
+        req.input('major', sql.NVarChar, cleanMajor.padEnd(16, ' '));
+        req.input('minor', sql.NVarChar, cleanMinor.padEnd(16, ' '));
+        req.input('guid', sql.NVarChar, guid);
+        req.input('uniqueId', sql.NVarChar, uniqueId);
+        req.input('version', sql.NVarChar, cleanVersion);
+        req.input('features', sql.NVarChar, features || description || '');
+
+        await req.query(`
+          INSERT INTO Products (
+            ID, ProductName, Major, Minor, GUID, UniqueID, LatestVersion, Features,
+            ReleaseDate, ModifiedDate, IncludeInCheckForUpdates, IncludeOnCustomerSite
+          ) VALUES (
+            @id, @name, @major, @minor, @guid, @uniqueId, @version, @features,
+            GETUTCDATE(), GETUTCDATE(), 1, 1
+          )
+        `);
+
+        // Invalidate cache immediately
+        cachedProducts = null;
+        lastProductsFetchTime = 0;
+
+        await recordAuditLog({
+          action: 'Create Product',
+          entity: 'Product',
+          entityId: String(nextId),
+          details: `Created new software product "${cleanName}" v${cleanVersion} (ID: ${nextId})`
+        });
+
+        return {
+          ProductID: nextId,
+          ProductName: cleanName,
+          ProductCode: cleanVersion,
+          MajorVersion: cleanMajor,
+          MinorVersion: cleanMinor,
+          Edition: 'Standard',
+          Description: features || description || '',
+          TotalLicenses: 0,
+          ActiveLicenses: 0,
+          TrialLicenses: 0,
+          SubscriptionLicenses: 0,
+          IsActive: 1
+        };
+      }
+    } catch (err) {
+      console.error('[EC2 DB Query Error] insertProduct:', err.message);
+      throw err;
+    }
+  }
+
+  // Memory fallback
+  const nextId = memoryStore.products.length > 0 ? Math.max(...memoryStore.products.map(p => p.ProductID)) + 1 : 1;
+  const newProd = {
+    ProductID: nextId,
+    ProductName: cleanName,
+    ProductCode: cleanVersion,
+    MajorVersion: cleanMajor,
+    MinorVersion: cleanMinor,
+    Edition: 'Standard',
+    Description: description || '',
+    TotalLicenses: 0,
+    ActiveLicenses: 0,
+    TrialLicenses: 0,
+    SubscriptionLicenses: 0,
+    IsActive: 1
+  };
+  memoryStore.products.push(newProd);
+  cachedProducts = null;
+  return newProd;
 }
 
 export async function fetchAuditLogs(limit = 50) {

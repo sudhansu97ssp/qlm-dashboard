@@ -25,15 +25,12 @@ import {
   KeyRound,
   Mail,
   MapPin,
-  RotateCcw
+  RotateCcw,
+  Phone,
+  User,
+  Building2
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
-
-const tierColors = {
-  Strategic: { bg: '#fdf2f8', color: '#be185d', border: '#fbcfe8' },
-  Enterprise: { bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
-  Standard: { bg: '#f1f5f9', color: '#475569', border: '#cbd5e1' }
-};
 
 export default function CustomersView({
   customers = [],
@@ -83,7 +80,7 @@ export default function CustomersView({
             {/* Search Input */}
             <TextField
               size="small"
-              placeholder="Search by company, contact, or email..."
+              placeholder="Search by name, company, email, phone, location..."
               value={filters.search || ''}
               onChange={(e) => onFilterChange('search', e.target.value)}
               slotProps={{
@@ -110,18 +107,18 @@ export default function CustomersView({
               ))}
             </TextField>
 
-            {/* Tier Filter */}
+            {/* License Model Filter */}
             <TextField
               select
               size="small"
-              label="Tier"
+              label="License Model"
               value={filters.tier || 'All'}
               onChange={(e) => onFilterChange('tier', e.target.value === 'All' ? '' : e.target.value)}
             >
-              <MenuItem value="All">All Tiers</MenuItem>
-              <MenuItem value="Strategic">Strategic</MenuItem>
-              <MenuItem value="Enterprise">Enterprise</MenuItem>
-              <MenuItem value="Standard">Standard</MenuItem>
+              <MenuItem value="All">All Models</MenuItem>
+              <MenuItem value="Trial">Trial</MenuItem>
+              <MenuItem value="Subscription">Subscription</MenuItem>
+              <MenuItem value="Trial & Subscription">Trial & Subscription</MenuItem>
             </TextField>
 
             {/* Status Filter */}
@@ -156,14 +153,15 @@ export default function CustomersView({
       {/* Customers Data Table */}
       <Card>
         <TableContainer sx={{ overflowX: 'auto' }}>
-          <Table sx={{ minWidth: 900 }}>
+          <Table sx={{ minWidth: 1050 }}>
             <TableHead>
               <TableRow>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>Company & Contact</TableCell>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>Customer ID</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>Customer Name</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>Company</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>Email</TableCell>
                 <TableCell sx={{ whiteSpace: 'nowrap' }}>Location</TableCell>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>Tier</TableCell>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>Status</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>Phone Number</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>License Model</TableCell>
                 <TableCell sx={{ whiteSpace: 'nowrap' }}>Licenses (Active/Total)</TableCell>
                 <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>Actions</TableCell>
               </TableRow>
@@ -171,59 +169,113 @@ export default function CustomersView({
             <TableBody>
               {displayedCustomers.length > 0 ? (
                 displayedCustomers.map((c) => {
-                  const tierStyle = tierColors[c.CustomerTier] || tierColors.Standard;
                   return (
                     <TableRow key={c.CustomerID} hover>
+                      {/* Customer Name */}
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>
-                          {c.CompanyName}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.3 }}>
-                          <Typography variant="caption" sx={{ color: '#64748b', display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-                            <Mail size={12} /> {c.Email}
-                          </Typography>
-                          <Typography variant="caption" sx={{ color: '#94a3b8' }}>•</Typography>
-                          <Typography variant="caption" sx={{ color: '#64748b' }}>
-                            {c.ContactName}
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Box
+                            sx={{
+                              width: 30,
+                              height: 30,
+                              borderRadius: '50%',
+                              backgroundColor: '#eff6ff',
+                              color: '#2563eb',
+                              border: '1px solid #bfdbfe',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '0.775rem',
+                              fontWeight: 700,
+                              flexShrink: 0
+                            }}
+                          >
+                            {(c.CustomerName || c.ContactName || 'C').charAt(0).toUpperCase()}
+                          </Box>
+                          <Typography variant="body2" sx={{ fontWeight: 600, color: '#0f172a' }}>
+                            {c.CustomerName || c.ContactName || '—'}
                           </Typography>
                         </Box>
                       </TableCell>
 
+                      {/* Company */}
                       <TableCell>
-                        <Typography variant="caption" className="font-mono" sx={{ fontWeight: 600, color: '#475569' }}>
-                          {c.CustomerID}
+                        <Typography variant="body2" sx={{ fontWeight: 500, color: '#334155' }}>
+                          {c.Company || c.CompanyName || '—'}
                         </Typography>
                       </TableCell>
 
+                      {/* Email */}
+                      <TableCell>
+                        <Typography
+                          component="a"
+                          href={`mailto:${c.Email}`}
+                          variant="body2"
+                          sx={{
+                            color: '#2563eb',
+                            fontSize: '0.825rem',
+                            textDecoration: 'none',
+                            '&:hover': { textDecoration: 'underline' }
+                          }}
+                        >
+                          {c.Email || '—'}
+                        </Typography>
+                      </TableCell>
+
+                      {/* Location */}
                       <TableCell>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                           <MapPin size={13} color="#94a3b8" />
                           <Typography variant="body2" sx={{ fontSize: '0.825rem', color: '#475569' }}>
-                            {c.City ? `${c.City}, ${c.Country}` : c.Country}
+                            {c.Location || (c.City ? `${c.City}, ${c.Country}` : c.Country || 'Global')}
                           </Typography>
                         </Box>
                       </TableCell>
 
+                      {/* Phone Number */}
+                      <TableCell>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          {c.Phone && c.Phone !== '—' ? (
+                            <>
+                              <Phone size={13} color="#94a3b8" />
+                              <Typography variant="body2" sx={{ fontSize: '0.825rem', color: '#475569' }}>
+                                {c.Phone}
+                              </Typography>
+                            </>
+                          ) : (
+                            <Typography variant="body2" sx={{ fontSize: '0.825rem', color: '#94a3b8' }}>
+                              —
+                            </Typography>
+                          )}
+                        </Box>
+                      </TableCell>
+
+                      {/* License Model */}
                       <TableCell>
                         <Chip
-                          label={c.CustomerTier}
+                          label={c.LicenseModel || 'Standard'}
                           size="small"
                           sx={{
-                            backgroundColor: tierStyle.bg,
-                            color: tierStyle.color,
-                            border: `1px solid ${tierStyle.border}`,
                             fontWeight: 600,
-                            borderRadius: '4px',
+                            fontSize: '0.725rem',
                             height: 22,
-                            fontSize: '0.725rem'
+                            backgroundColor:
+                              c.LicenseModel === 'Trial' ? '#fffbeb' :
+                              c.LicenseModel === 'Subscription' ? '#eff6ff' :
+                              c.LicenseModel === 'Trial & Subscription' ? '#faf5ff' : '#f1f5f9',
+                            color:
+                              c.LicenseModel === 'Trial' ? '#b45309' :
+                              c.LicenseModel === 'Subscription' ? '#1d4ed8' :
+                              c.LicenseModel === 'Trial & Subscription' ? '#7e22ce' : '#475569',
+                            border:
+                              c.LicenseModel === 'Trial' ? '1px solid #fde68a' :
+                              c.LicenseModel === 'Subscription' ? '1px solid #bfdbfe' :
+                              c.LicenseModel === 'Trial & Subscription' ? '1px solid #e9d5ff' : '1px solid #cbd5e1'
                           }}
                         />
                       </TableCell>
 
-                      <TableCell>
-                        <StatusBadge status={c.Status} />
-                      </TableCell>
-
+                      {/* Licenses */}
                       <TableCell>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <Chip
@@ -244,6 +296,7 @@ export default function CustomersView({
                         </Box>
                       </TableCell>
 
+                      {/* Actions */}
                       <TableCell align="right">
                         <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
                           <Button
@@ -262,7 +315,7 @@ export default function CustomersView({
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} sx={{ textAlign: 'center', py: 5 }}>
+                  <TableCell colSpan={8} sx={{ textAlign: 'center', py: 5 }}>
                     <Typography variant="body2" sx={{ color: '#64748b' }}>
                       No customers found matching the selected filter criteria.
                     </Typography>

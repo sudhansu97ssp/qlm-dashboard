@@ -394,25 +394,14 @@ export default function LicenseDetailModal({ open, onClose, license, onStatusCha
                     </Typography>
                   </Box>
 
-                  {/* Edition & Version */}
-                  <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-                    <Box sx={{ p: 1.25, backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
-                      <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.7rem', display: 'block' }}>
-                        Edition / Release
-                      </Typography>
-                      <Typography variant="body2" sx={{ fontWeight: 600, color: '#334155', fontSize: '0.825rem' }}>
-                        {cleanEdition ? `Edition ${cleanEdition}` : 'Standard Edition'}
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ p: 1.25, backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
-                      <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.7rem', display: 'block' }}>
-                        Version Code
-                      </Typography>
-                      <Typography variant="body2" className="font-mono" sx={{ fontWeight: 600, color: '#334155', fontSize: '0.825rem' }}>
-                        {cleanProductCode || '1.0.0'}
-                      </Typography>
-                    </Box>
+                  {/* Current Version */}
+                  <Box sx={{ p: 1.25, backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                    <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: '0.7rem', display: 'block' }}>
+                      Current Version
+                    </Typography>
+                    <Typography variant="body2" className="font-mono" sx={{ fontWeight: 600, color: '#334155', fontSize: '0.825rem' }}>
+                      {cleanProductCode ? (cleanProductCode.startsWith('v') ? cleanProductCode : `v${cleanProductCode}`) : 'v1.0.0'}
+                    </Typography>
                   </Box>
 
                   {/* Lifecycle Dates */}

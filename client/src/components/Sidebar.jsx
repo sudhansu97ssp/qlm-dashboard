@@ -18,6 +18,7 @@ import {
   Users,
   KeyRound,
   ShieldCheck,
+  Package,
   ChevronLeft,
   ChevronRight,
   Sparkles,
@@ -25,9 +26,10 @@ import {
 } from 'lucide-react';
 
 const navItems = [
-  { id: 'analytics', label: 'Analytics Dashboard', icon: LayoutDashboard },
+  { id: 'analytics', label: 'Home', icon: LayoutDashboard },
   { id: 'customers', label: 'Customer Directory', icon: Users, badgeKey: 'customers' },
   { id: 'licenses', label: 'License Manager', icon: KeyRound, badgeKey: 'licenses' },
+  { id: 'products', label: 'Products', icon: Package, badgeKey: 'products' },
   { id: 'audit', label: 'Audit Trail', icon: ShieldCheck }
 ];
 
@@ -294,7 +296,7 @@ export default function Sidebar({
         }}
       >
         {isCollapsed && !isMobile ? (
-          <Tooltip title={`Sign Out (${currentUser?.email || 'admin'})`} placement="right">
+          <Tooltip title="Sign Out (Admin)" placement="right">
             <IconButton
               size="small"
               onClick={onLogout}
@@ -332,7 +334,7 @@ export default function Sidebar({
                   flexShrink: 0
                 }}
               >
-                {(currentUser?.email || currentUser?.username || 'A')[0].toUpperCase()}
+                A
               </Box>
               <Box sx={{ overflow: 'hidden' }}>
                 <Typography
@@ -347,7 +349,7 @@ export default function Sidebar({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  {currentUser?.email || currentUser?.username || 'admin@ncircletech.com'}
+                  Admin
                 </Typography>
                 <Typography
                   variant="caption"

@@ -11,7 +11,9 @@ import LoginView from './views/LoginView';
 import AnalyticsView from './views/AnalyticsView';
 import CustomersView from './views/CustomersView';
 import LicensesView from './views/LicensesView';
+import ProductsView from './views/ProductsView';
 import AuditLogsView from './views/AuditLogsView';
+import CreateProductModal from './components/CreateProductModal';
 import { KeyRound } from 'lucide-react';
 
 import {
@@ -20,6 +22,7 @@ import {
   fetchLicenses,
   fetchLicenseById,
   fetchProducts,
+  createProduct,
   fetchAuditLogs,
   verifyToken,
   logout
@@ -55,6 +58,7 @@ export default function App() {
 
   // Modals & Inspection State
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createProductModalOpen, setCreateProductModalOpen] = useState(false);
   const [selectedCustomerForCreate, setSelectedCustomerForCreate] = useState(null);
   const [selectedLicense, setSelectedLicense] = useState(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -254,6 +258,13 @@ export default function App() {
     loadDashboardData(true);
   };
 
+  const handleCreateProductSuccess = async (productData) => {
+    const res = await createProduct(productData);
+    showToast(`Product "${productData.productName}" created successfully!`, 'success');
+    loadDashboardData(true);
+    return res;
+  };
+
   // 1. Initial Authentication Checking Screen
   if (isAuthChecking) {
     return (
@@ -325,7 +336,8 @@ export default function App() {
         onTabChange={(tab) => setActiveTab(tab)}
         counts={{
           customers: customers.length,
-          licenses: licenses.length
+          licenses: licenses.length,
+          products: products.length
         }}
         isCollapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
@@ -404,6 +416,19 @@ export default function App() {
           {activeTab === 'audit' && (
             <AuditLogsView auditLogs={auditLogs} />
           )}
+
+          {/* Tab 5: Created Products Catalog */}
+          {activeTab === 'products' && (
+            <ProductsView
+              products={products}
+              onOpenCreateProduct={() => setCreateProductModalOpen(true)}
+              onIssueLicenseForProduct={(product) => {
+                setSelectedCustomerForCreate(null);
+                setCreateModalOpen(true);
+              }}
+              onRefresh={() => loadDashboardData(true)}
+            />
+          )}
         </Box>
       </Box>
 
@@ -414,6 +439,13 @@ export default function App() {
         customers={customers}
         products={products}
         onSuccess={handleLicenseCreatedSuccess}
+      />
+
+      {/* Product Creation Wizard Modal */}
+      <CreateProductModal
+        open={createProductModalOpen}
+        onClose={() => setCreateProductModalOpen(false)}
+        onCreateSuccess={handleCreateProductSuccess}
       />
 
       {/* License Detail Inspector Modal */}

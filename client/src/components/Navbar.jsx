@@ -169,7 +169,7 @@ export default function Navbar({
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Chip
               icon={<User size={14} color="#0284c7" />}
-              label={currentUser?.email || currentUser?.username || 'admin@ncircletech.com'}
+              label="Admin"
               size="small"
               sx={{
                 height: 32,

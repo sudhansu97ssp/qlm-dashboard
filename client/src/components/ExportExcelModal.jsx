@@ -135,10 +135,11 @@ export default function ExportExcelModal({ open, onClose, licenses = [] }) {
         return {
           'License ID': lic.LicenseID,
           'Activation Key': lic.ActivationKey,
-          'Customer / Company': lic.CompanyName || 'Independent Customer',
-          'Contact Name': lic.ContactName || 'N/A',
-          'Customer Email': lic.CustomerEmail || 'N/A',
-          'Country': lic.Country || 'Global',
+          'Customer Name': lic.ContactName || lic.CustomerName || '—',
+          'Company': lic.CompanyName || '—',
+          'Customer Email': lic.CustomerEmail || lic.Email || '—',
+          'Phone Number': lic.Phone || lic.PhoneNumber || '—',
+          'Location': lic.Location || lic.Country || 'Global',
           'Product Name': lic.ProductName || 'QLM Product',
           'Edition': (lic.Edition || 'Standard').trim(),
           'Version': (lic.ProductCode || '1.0').trim(),
@@ -154,40 +155,22 @@ export default function ExportExcelModal({ open, onClose, licenses = [] }) {
         };
       });
 
-      // 2. Prepare Summary Metadata Sheet
-      const summaryData = [
-        { Parameter: 'Report Name', Value: 'Soraco QLM Periodic License & Activation Export' },
-        { Parameter: 'Generated On', Value: new Date().toLocaleString() },
-        { Parameter: 'Selected Period', Value: PERIOD_OPTIONS.find(p => p.id === selectedPeriod)?.desc || selectedPeriod },
-        { Parameter: 'Date Range Window', Value: dateRange.label },
-        { Parameter: 'Date Basis Field', Value: dateField === 'IssuedDate' ? 'Issued / Order Date' : 'Expiration Date' },
-        { Parameter: 'Target License Models', Value: TYPE_OPTIONS.find(t => t.id === selectedType)?.label || selectedType },
-        { Parameter: 'Total License Keys Generated', Value: metrics.total },
-        { Parameter: 'Trial Model Keys', Value: metrics.trials },
-        { Parameter: 'Subscription Model Keys', Value: metrics.subscriptions },
-        { Parameter: 'Active Status Licenses', Value: metrics.active },
-        { Parameter: 'Expired Status Licenses', Value: metrics.expired },
-        { Parameter: 'Total Activations Allowed (NumLicenses)', Value: metrics.totalActivationsAllowed },
-        { Parameter: 'Total Activated Licenses', Value: metrics.totalActivated },
-        { Parameter: 'Total Not Yet Activated (AvailableLicenses)', Value: metrics.totalNotYetActivated }
-      ];
-
-      // 3. Build XLSX Workbook
+      // 2. Build XLSX Workbook (Clean single-sheet data export)
       const workbook = XLSX.utils.book_new();
 
       const wsLicenses = XLSX.utils.json_to_sheet(sheetData.length > 0 ? sheetData : [{ Status: 'No matching records for selected filter criteria' }]);
-      const wsSummary = XLSX.utils.json_to_sheet(summaryData);
 
       // Auto-fit column widths for cleaner readability in Excel
       wsLicenses['!cols'] = [
         { wch: 12 }, // License ID
         { wch: 34 }, // Activation Key
+        { wch: 24 }, // Customer Name
         { wch: 28 }, // Company
-        { wch: 22 }, // Contact
-        { wch: 28 }, // Email
-        { wch: 16 }, // Country
-        { wch: 32 }, // Product
-        { wch: 12 }, // Edition
+        { wch: 28 }, // Customer Email
+        { wch: 18 }, // Phone Number
+        { wch: 18 }, // Location
+        { wch: 32 }, // Product Name
+        { wch: 14 }, // Edition
         { wch: 10 }, // Version
         { wch: 16 }, // License Model
         { wch: 12 }, // Status
@@ -200,14 +183,8 @@ export default function ExportExcelModal({ open, onClose, licenses = [] }) {
         { wch: 30 }  // Notes
       ];
 
-      wsSummary['!cols'] = [
-        { wch: 36 },
-        { wch: 38 }
-      ];
-
-      // Append worksheets
+      // Append single data worksheet
       XLSX.utils.book_append_sheet(workbook, wsLicenses, 'LicenseKeys');
-      XLSX.utils.book_append_sheet(workbook, wsSummary, 'Export Summary');
 
       // 4. File Naming Convention
       const timestamp = new Date().toISOString().split('T')[0];

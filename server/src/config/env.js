@@ -23,8 +23,8 @@ export const config = {
     options: {
       encrypt: process.env.MSSQL_ENCRYPT === 'true',
       trustServerCertificate: process.env.MSSQL_TRUST_SERVER_CERT !== 'false',
-      connectTimeout: 8000,
-      requestTimeout: 20000,
+      connectTimeout: 15000,
+      requestTimeout: 45000,
     },
     pool: {
       max: 10,

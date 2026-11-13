@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "QLM Soraco License Manager & EC2 MS SQL Analytics Dashboard",
   "type": "module",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "build": "npm --prefix client install && npm --prefix client run build",
     "vercel-build": "npm --prefix client install && npm --prefix client run build",
