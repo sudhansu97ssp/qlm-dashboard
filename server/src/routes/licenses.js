@@ -64,6 +64,8 @@ router.post('/create', async (req, res) => {
       numLicenses,
       features = 65535,
       expiryDate,
+      durationDays,
+      duration,
       notes = ''
     } = req.body;
 
@@ -78,6 +80,7 @@ router.post('/create', async (req, res) => {
 
     const effectiveModel = licenseModel || licenseType || 'Subscription';
     const effectiveNumLicenses = parseInt(numLicenses || seats || 1, 10);
+    const parsedDuration = durationDays != null ? parseInt(durationDays, 10) : (duration != null ? parseInt(duration, 10) : null);
 
     // Call QLM Soraco API
     const qlmResult = await createQlmLicense({
@@ -92,12 +95,14 @@ router.post('/create', async (req, res) => {
       seats: effectiveNumLicenses,
       features: parseInt(features, 10),
       expiryDate,
+      durationDays: parsedDuration,
       notes
     });
 
     // Record into MS SQL Database
     const savedRecord = await insertLicense({
       ...qlmResult,
+      durationDays: parsedDuration,
       CustomerID: customer.CustomerID
     });
 

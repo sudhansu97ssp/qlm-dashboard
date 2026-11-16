@@ -100,10 +100,16 @@ export default function LicenseDetailModal({ open, onClose, license, onStatusCha
   const cleanProductCode = (license.ProductCode || '').trim();
 
   // Expiration label logic
-  const isPerpetual = !license.ExpiryDate || license.ExpiryDate.startsWith('1899') || license.ExpiryDate.startsWith('1900');
-  const formattedExpiry = isPerpetual
-    ? 'Perpetual (No Expiration)'
-    : new Date(license.ExpiryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  const duration = license.SubscriptionDuration || license.DurationDays;
+  const isPerpetual = (!license.ExpiryDate && (!duration || duration <= 0)) ||
+    (license.ExpiryDate && (license.ExpiryDate.startsWith('1899') || license.ExpiryDate.startsWith('1900')));
+  
+  let formattedExpiry = 'Perpetual (No Expiration)';
+  if (license.ExpiryDate && !isPerpetual) {
+    formattedExpiry = new Date(license.ExpiryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  } else if (duration && duration > 0) {
+    formattedExpiry = `${duration} Days on activation (Starts upon first install)`;
+  }
 
   const formattedIssued = license.IssuedDate
     ? new Date(license.IssuedDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })

@@ -499,6 +499,8 @@ export async function fetchLicenses({ search = '', status = '', productId = '', 
               l.OrderDate,
               l.CreationDate,
               l.SubscriptionExpiryDate,
+              l.SubscriptionDuration,
+              l.ActivationDate,
               l.MaintenanceRenewalDate,
               l.LastAccessedDate,
               l.Comment as Notes
@@ -544,10 +546,16 @@ export async function fetchLicenses({ search = '', status = '', productId = '', 
             (l.Notes && String(l.Notes).toLowerCase().includes('revoked:'))
           );
 
+          const duration = l.SubscriptionDuration != null ? Number(l.SubscriptionDuration) : null;
+          let calculatedExpiry = l.SubscriptionExpiryDate;
+          if (!calculatedExpiry && duration && duration > 0 && l.ActivationDate) {
+            calculatedExpiry = new Date(new Date(l.ActivationDate).getTime() + duration * 86400000);
+          }
+
           let licStatus = 'Active';
           if (isRevoked) {
             licStatus = 'Revoked';
-          } else if (l.SubscriptionExpiryDate && new Date(l.SubscriptionExpiryDate) < now) {
+          } else if (calculatedExpiry && new Date(calculatedExpiry) < now) {
             licStatus = 'Expired';
           } else if (l.Notes && String(l.Notes).toLowerCase().includes('deactivated:')) {
             licStatus = 'Deactivated';
@@ -587,7 +595,10 @@ export async function fetchLicenses({ search = '', status = '', productId = '', 
             SeatsTotal: numLics,
             SeatsUsed: activatedCount,
             IssuedDate: l.OrderDate || l.CreationDate,
-            ExpiryDate: l.SubscriptionExpiryDate,
+            ActivationDate: l.ActivationDate,
+            SubscriptionDuration: duration,
+            DurationDays: duration,
+            ExpiryDate: calculatedExpiry,
             MaintenanceExpiryDate: l.MaintenanceRenewalDate,
             LastCheckIn: l.LastAccessedDate,
             Notes: l.Notes
@@ -850,6 +861,11 @@ export async function insertLicense(licenseData) {
         req.input('ProductID', sql.Int, parseInt(licenseData.ProductID || '1', 10));
         req.input('NumLicenses', sql.Int, totalActivations);
         req.input('AvailableLicenses', sql.Int, totalActivations);
+        const durationVal = licenseData.durationDays != null
+          ? parseInt(licenseData.durationDays, 10)
+          : (licenseData.SubscriptionDuration != null ? parseInt(licenseData.SubscriptionDuration, 10) : -1);
+
+        req.input('Duration', sql.Int, durationVal && durationVal > 0 ? durationVal : -1);
         req.input('ExpiryDate', sql.DateTime, licenseData.ExpiryDate ? new Date(licenseData.ExpiryDate) : null);
         req.input('Comment', sql.NVarChar, licenseData.Notes || '');
         const modelMap = { 'Permanent': 1, 'Trial': 2, 'Subscription': 3, 'Floating': 4 };
@@ -858,10 +874,10 @@ export async function insertLicense(licenseData) {
         const insertRes = await req.query(`
           INSERT INTO LicenseKeys (
             ActivationKey, UserID, ProductID, NumLicenses, AvailableLicenses,
-            SubscriptionExpiryDate, Comment, LicenseModel, CreationDate, OrderDate, Disabled
+            SubscriptionDuration, SubscriptionExpiryDate, Comment, LicenseModel, CreationDate, OrderDate, Disabled
           ) OUTPUT INSERTED.ID VALUES (
             @ActivationKey, @UserID, @ProductID, @NumLicenses, @AvailableLicenses,
-            @ExpiryDate, @Comment, @LicenseModel, GETUTCDATE(), GETUTCDATE(), 0
+            @Duration, @ExpiryDate, @Comment, @LicenseModel, GETUTCDATE(), GETUTCDATE(), 0
           )
         `);
         licenseData.LicenseID = insertRes.recordset[0]?.ID || licenseData.LicenseID;

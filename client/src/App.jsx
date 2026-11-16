@@ -60,6 +60,7 @@ export default function App() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createProductModalOpen, setCreateProductModalOpen] = useState(false);
   const [selectedCustomerForCreate, setSelectedCustomerForCreate] = useState(null);
+  const [selectedProductForCreate, setSelectedProductForCreate] = useState(null);
   const [selectedLicense, setSelectedLicense] = useState(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -362,6 +363,7 @@ export default function App() {
           activeTab={activeTab}
           onOpenCreateModal={() => {
             setSelectedCustomerForCreate(null);
+            setSelectedProductForCreate(null);
             setCreateModalOpen(true);
           }}
           onOpenExportModal={() => setExportModalOpen(true)}
@@ -405,6 +407,7 @@ export default function App() {
               onResetFilters={handleResetLicenseFilters}
               onOpenCreateModal={() => {
                 setSelectedCustomerForCreate(null);
+                setSelectedProductForCreate(null);
                 setCreateModalOpen(true);
               }}
               onSelectLicense={handleSelectLicense}
@@ -424,6 +427,7 @@ export default function App() {
               onOpenCreateProduct={() => setCreateProductModalOpen(true)}
               onIssueLicenseForProduct={(product) => {
                 setSelectedCustomerForCreate(null);
+                setSelectedProductForCreate(product);
                 setCreateModalOpen(true);
               }}
               onRefresh={() => loadDashboardData(true)}
@@ -439,6 +443,8 @@ export default function App() {
         customers={customers}
         products={products}
         onSuccess={handleLicenseCreatedSuccess}
+        initialCustomer={selectedCustomerForCreate}
+        initialProduct={selectedProductForCreate}
       />
 
       {/* Product Creation Wizard Modal */}

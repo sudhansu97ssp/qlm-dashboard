@@ -404,9 +404,39 @@ export default function LicensesView({
 
                       {/* Expiration */}
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontSize: '0.825rem' }}>
-                          {lic.ExpiryDate ? new Date(lic.ExpiryDate).toLocaleDateString() : 'Permanent'}
-                        </Typography>
+                        {lic.ExpiryDate ? (
+                          <Typography variant="body2" sx={{ fontSize: '0.825rem', fontWeight: 600, color: '#334155' }}>
+                            {new Date(lic.ExpiryDate).toLocaleDateString()}
+                          </Typography>
+                        ) : (lic.SubscriptionDuration && lic.SubscriptionDuration > 0) || (lic.DurationDays && lic.DurationDays > 0) ? (
+                          <Tooltip title="Validity begins when customer first activates on their computer">
+                            <Chip
+                              label={`${lic.SubscriptionDuration || lic.DurationDays}d on activation`}
+                              size="small"
+                              sx={{
+                                height: 22,
+                                fontSize: '0.7rem',
+                                fontWeight: 700,
+                                backgroundColor: '#eff6ff',
+                                color: '#1d4ed8',
+                                border: '1px solid #bfdbfe'
+                              }}
+                            />
+                          </Tooltip>
+                        ) : (
+                          <Chip
+                            label="Permanent"
+                            size="small"
+                            sx={{
+                              height: 22,
+                              fontSize: '0.7rem',
+                              fontWeight: 600,
+                              backgroundColor: '#f8fafc',
+                              color: '#64748b',
+                              border: '1px solid #e2e8f0'
+                            }}
+                          />
+                        )}
                       </TableCell>
 
                       {/* Actions: Inspect, Deactivate, Revoke */}

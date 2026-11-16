@@ -57,11 +57,14 @@ export async function createQlmLicense(licenseRequest) {
     numLicenses = null,
     features = 65535,
     expiryDate = null,
+    durationDays = null,
+    duration = null,
     notes = ''
   } = licenseRequest;
 
   const modelVal = licenseModel || licenseType || 'Subscription';
   const allowedActivations = parseInt(numLicenses || seats || 1, 10);
+  const parsedDuration = durationDays != null ? parseInt(durationDays, 10) : (duration != null ? parseInt(duration, 10) : null);
 
   const timestamp = new Date().toISOString();
   let activationKey = null;
@@ -78,7 +81,8 @@ export async function createQlmLicense(licenseRequest) {
     is_majorversion: majorVersion,
     is_minorversion: minorVersion,
     is_features: features,
-    is_expdate: expiryDate ? expiryDate.split('T')[0] : '2099-12-31',
+    is_expdate: expiryDate ? expiryDate.split('T')[0] : (parsedDuration ? '' : '2099-12-31'),
+    is_duration: parsedDuration && parsedDuration > 0 ? parsedDuration : '',
     is_numlicenses: allowedActivations,
     is_admin_encryption_key: activeQlmConfig.adminEncryptionKey,
     is_license_type: modelVal
@@ -140,8 +144,10 @@ export async function createQlmLicense(licenseRequest) {
     SeatsUsed: 0,
     FeaturesMask: parseInt(features, 10),
     IssuedDate: timestamp,
-    ExpiryDate: expiryDate || (modelVal === 'Subscription' ? new Date(Date.now() + 365*24*3600*1000).toISOString() : null),
-    MaintenanceExpiryDate: expiryDate || new Date(Date.now() + 365*24*3600*1000).toISOString(),
+    SubscriptionDuration: parsedDuration,
+    DurationDays: parsedDuration,
+    ExpiryDate: expiryDate || (!parsedDuration && modelVal === 'Subscription' ? new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString() : null),
+    MaintenanceExpiryDate: expiryDate || new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
     Notes: notes || `Created for ${customerName} (${companyName})`,
     QlmResponseXml: rawXml,
     executionSource
